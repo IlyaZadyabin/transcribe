@@ -58,32 +58,18 @@ source ~/.zshrc
 
 ## Installation
 
-### Option 1: Install with pipx (recommended)
-
 ```bash
 # Install pipx if you don't have it
 brew install pipx
 pipx ensurepath
 
-# Install interview-transcribe from GitHub (specify Python 3.11 if your default is 3.14+)
+# Install from GitHub (specify Python 3.11 if your default is 3.14+)
 pipx install --python python3.11 git+https://github.com/IlyaZadyabin/transcribe.git
 ```
 
-### Option 2: Install from local clone
+**For development** (if you want to modify the code):
 
 ```bash
-# Clone the repository
-git clone https://github.com/IlyaZadyabin/transcribe.git
-cd transcribe
-
-# Install with pipx (use Python 3.11 if your default is 3.14+)
-pipx install --python python3.11 .
-```
-
-### Option 3: Development install
-
-```bash
-# Clone and install in editable mode
 git clone https://github.com/IlyaZadyabin/transcribe.git
 cd transcribe
 pip install -e .
