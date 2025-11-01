@@ -1,0 +1,59 @@
+[project]
+name = "interview-transcribe"
+version = "0.1.0"
+description = "Diarized interview transcription using WhisperX and pyannote with interactive speaker identification"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = {text = "MIT"}
+authors = [{name = "Ilia Zadiabin", email = "iliazadiabin@gmail.com"}]
+keywords = ["transcription", "whisper", "diarization", "interview", "audio", "video"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "whisperx>=3.1.1",
+    "torch>=2.0.0,<2.5.0",
+    "torchaudio>=2.0.0,<2.5.0",
+    "pyannote.audio>=3.1.0,<3.4.0",
+    "matplotlib>=3.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+transcribe = "interview_transcribe.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/IlyaZadyabin/transcribe"
+Repository = "https://github.com/IlyaZadyabin/transcribe"
+Issues = "https://github.com/IlyaZadyabin/transcribe/issues"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
