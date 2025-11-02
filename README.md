@@ -8,6 +8,7 @@ Transform audio/video interviews into readable, speaker-labeled transcripts with
 
 - **Automatic transcription** using OpenAI's Whisper (via WhisperX)
 - **Speaker diarization** using pyannote.audio 3.1
+- **Dual-track mode** for OBS-style multi-track recordings (no diarization needed)
 - **Interactive speaker identification** with sample previews
 - **Non-interactive mode** for automation
 - **Time-blocked formatting** for easy reading
@@ -35,7 +36,9 @@ brew install python@3.11
 brew install ffmpeg
 ```
 
-### 3. Get a HuggingFace Token
+### 3. Get a HuggingFace Token (for diarization mode only)
+
+**Note:** If you're using `--dual-track` mode with OBS-style multi-track recordings, you can skip this step.
 
 1. Create an account at [HuggingFace](https://huggingface.co/)
 2. Go to [Settings → Access Tokens](https://huggingface.co/settings/tokens)
@@ -102,6 +105,30 @@ transcribe interview.mov --speakers "Alice,Bob"
 
 Speaker names are assigned in order to detected speakers (sorted by ID).
 
+### Dual-Track Mode (No Diarization)
+
+If you recorded with OBS or similar tools that capture separate audio tracks for each speaker, you can skip diarization entirely:
+
+```bash
+transcribe interview.mov --dual-track
+```
+
+**What happens:**
+1. Extracts Track 2 (You) and Track 3 (Guest) as separate audio streams
+2. Transcribes each track independently with WhisperX
+3. Merges transcripts by timestamp
+4. Labels segments as "You" and "Guest"
+5. No HuggingFace token required
+
+**Custom track mapping:**
+
+```bash
+# If your tracks are in different positions
+transcribe interview.mov --dual-track --you-track 0 --guest-track 1
+```
+
+Track indices use ffmpeg's 0-based indexing (Track 1 = 0, Track 2 = 1, Track 3 = 2, etc.).
+
 ### Advanced Options
 
 ```bash
@@ -142,9 +169,15 @@ transcribe --help
 
 The tool creates a directory (e.g., `out_interview_diar/`) containing:
 
+**Standard mode:**
 - `audio.wav` - Extracted mono audio
 - `audio.json` - WhisperX output with word-level timestamps
 - `transcript.txt` - Formatted transcript (default name)
+
+**Dual-track mode:**
+- `you.wav` / `guest.wav` - Extracted track audio
+- `you_transcribe/` / `guest_transcribe/` - Individual transcription outputs
+- `transcript.txt` - Merged transcript with speaker labels
 
 ### Example Transcript
 

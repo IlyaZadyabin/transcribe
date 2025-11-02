@@ -34,6 +34,25 @@ def check_ffmpeg() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def count_audio_streams(input_path: str) -> int:
+    """Count number of audio streams in the input file using ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-i",
+            input_path,
+            "-show_streams",
+            "-select_streams",
+            "a",
+            "-loglevel",
+            "error",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.count("[STREAM]")
+
+
 def extract_mono_wav(input_path: str, out_dir: str) -> str:
     """Extract first audio stream as mono 16 kHz WAV (no probing)."""
     wav_path = os.path.join(out_dir, "audio.wav")
@@ -44,6 +63,70 @@ def extract_mono_wav(input_path: str, out_dir: str) -> str:
     )
     print(f"✅ Audio extracted: {wav_path}")
     return wav_path
+
+
+def extract_track_wav(input_path: str, track_index: int, out_wav: str) -> None:
+    """Extract specific audio track as mono 16 kHz WAV."""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-map",
+            f"0:a:{track_index}",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            out_wav,
+        ],
+        check=True,
+    )
+
+
+def build_whisperx_cmd(
+    wav_path: str,
+    out_dir: str,
+    model: str,
+    language: str,
+    batch_size: int = 16,
+):
+    """Build WhisperX command without diarization."""
+    return [
+        sys.executable,
+        "-m",
+        "whisperx",
+        wav_path,
+        "--language",
+        language,
+        "--model",
+        model,
+        "--device",
+        "cpu",
+        "--compute_type",
+        "int8",
+        "--output_format",
+        "json",
+        "--highlight_words",
+        "True",
+        "--output_dir",
+        out_dir,
+        "--batch_size",
+        str(batch_size),
+    ]
+
+
+def transcribe_without_diarization(
+    wav_path: str,
+    out_dir: str,
+    model: str,
+    language: str,
+    batch_size: int = 16,
+):
+    """Run WhisperX transcription without diarization."""
+    cmd = build_whisperx_cmd(wav_path, out_dir, model, language, batch_size)
+    subprocess.run(cmd, check=True)
 
 
 def transcribe_with_diarization(
@@ -313,6 +396,14 @@ def write_blocked_transcript(segments, out_dir: str, fname: str, block_seconds=3
     print(f"✅ Transcript saved to: {path}")
 
 
+def find_first_json(directory: str) -> str:
+    """Find first .json file in directory."""
+    for f in os.listdir(directory):
+        if f.lower().endswith(".json"):
+            return os.path.join(directory, f)
+    return None
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -419,9 +510,29 @@ Requirements:
     )
 
     parser.add_argument(
+        "--dual-track",
+        action="store_true",
+        help="Use dual-track mode for OBS-style multi-track recordings (no diarization needed)",
+    )
+
+    parser.add_argument(
+        "--you-track",
+        type=int,
+        default=1,
+        help="Audio track index for 'You' (default: 1, which is Track 2 in ffmpeg 0-indexing)",
+    )
+
+    parser.add_argument(
+        "--guest-track",
+        type=int,
+        default=2,
+        help="Audio track index for 'Guest' (default: 2, which is Track 3 in ffmpeg 0-indexing)",
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version="%(prog)s 0.2.0",
     )
 
     return parser.parse_args()
@@ -437,22 +548,25 @@ def main():
         print("   Install with: brew install ffmpeg")
         sys.exit(1)
 
-    # Check HF token
-    hf_token = args.token or os.environ.get("HF_TOKEN")
-    if not hf_token:
-        print("❌ Error: HuggingFace token not found")
-        print("\nSet up your token:")
-        print("  1. Get token at: https://huggingface.co/settings/tokens")
-        print("  2. Grant access to: pyannote/speaker-diarization-3.1")
-        print("  3. Run: export HF_TOKEN=hf_xxx...")
-        print("     or use: transcribe --token hf_xxx... <file>")
-        sys.exit(1)
-
     # Validate input file
     input_path = args.input
     if not os.path.exists(input_path):
         print(f"❌ Error: File not found: {input_path}")
         sys.exit(1)
+
+    # Check HF token (only required for diarization mode)
+    hf_token = None
+    if not args.dual_track:
+        hf_token = args.token or os.environ.get("HF_TOKEN")
+        if not hf_token:
+            print("❌ Error: HuggingFace token not found")
+            print("\nSet up your token:")
+            print("  1. Get token at: https://huggingface.co/settings/tokens")
+            print("  2. Grant access to: pyannote/speaker-diarization-3.1")
+            print("  3. Run: export HF_TOKEN=hf_xxx...")
+            print("     or use: transcribe --token hf_xxx... <file>")
+            print("\nAlternatively, use --dual-track mode if you have OBS-style multi-track recordings")
+            sys.exit(1)
 
     # Parse speaker names if provided
     speaker_names = None
@@ -471,46 +585,151 @@ def main():
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # Extract audio
-    wav_path = extract_mono_wav(input_path, out_dir)
+    if args.dual_track:
+        # Dual-track mode: extract and transcribe separate tracks
+        print("\n🎙️  Dual-track mode enabled")
 
-    # Transcribe with diarization
-    transcribe_with_diarization(
-        wav_path,
-        out_dir,
-        model=args.model,
-        language=args.language,
-        min_speakers=args.min_speakers,
-        max_speakers=args.max_speakers,
-        hf_token=hf_token,
-        batch_size=args.batch_size,
-    )
+        # Check audio stream count
+        num_streams = count_audio_streams(input_path)
+        print(f"   Found {num_streams} audio stream(s)")
 
-    # Find WhisperX JSON output
-    json_files = [f for f in os.listdir(out_dir) if f.lower().endswith(".json")]
-    if not json_files:
-        print("❌ Error: Could not find WhisperX JSON output")
-        sys.exit(1)
-    json_path = os.path.join(out_dir, json_files[0])
+        you_idx = args.you_track
+        guest_idx = args.guest_track
 
-    # Load and process segments
-    segments = load_segments(json_path)
-    speakers, durations = summarize_speakers(segments)
+        if num_streams <= you_idx:
+            print(f"❌ Error: Track {you_idx+1} (You) not found. File has only {num_streams} audio stream(s).")
+            sys.exit(1)
+        if num_streams <= guest_idx:
+            print(f"❌ Error: Track {guest_idx+1} (Guest) not found. File has only {num_streams} audio stream(s).")
+            sys.exit(1)
 
-    if not speakers:
-        print("❌ Error: No speakers detected")
-        print("   Check diarization settings and HF token permissions")
-        sys.exit(1)
+        # Extract tracks
+        print(f"\n📥 Extracting Track {you_idx+1} (You)...")
+        you_wav = os.path.join(out_dir, "you.wav")
+        extract_track_wav(input_path, you_idx, you_wav)
 
-    # Map speakers (interactive or non-interactive)
-    if speaker_names:
-        mapping = non_interactive_map_speakers(speakers, speaker_names)
+        print(f"📥 Extracting Track {guest_idx+1} (Guest)...")
+        guest_wav = os.path.join(out_dir, "guest.wav")
+        extract_track_wav(input_path, guest_idx, guest_wav)
+
+        # Transcribe both tracks in parallel
+        print("\n🎤 Transcribing both tracks in parallel...")
+        you_dir = os.path.join(out_dir, "you_transcribe")
+        os.makedirs(you_dir, exist_ok=True)
+
+        guest_dir = os.path.join(out_dir, "guest_transcribe")
+        os.makedirs(guest_dir, exist_ok=True)
+
+        # Build whisperx commands
+        you_cmd = build_whisperx_cmd(you_wav, you_dir, args.model, args.language, args.batch_size)
+        guest_cmd = build_whisperx_cmd(
+            guest_wav, guest_dir, args.model, args.language, args.batch_size
+        )
+
+        # Start both processes (output will be interleaved)
+        print("   Starting You track transcription...")
+        print("   Starting Guest track transcription...")
+        print("   (Logs from both tracks will appear below)\n")
+
+        you_process = subprocess.Popen(
+            you_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        guest_process = subprocess.Popen(
+            guest_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+
+        # Stream output from both processes in real-time
+        import select
+
+        outputs = {you_process.stdout: "[You] ", guest_process.stdout: "[Guest] "}
+        readable = list(outputs.keys())
+
+        while readable:
+            ready, _, _ = select.select(readable, [], [], 0.1)
+            for stream in ready:
+                line = stream.readline()
+                if line:
+                    print(outputs[stream] + line, end="", flush=True)
+                else:
+                    readable.remove(stream)
+
+        # Wait for both to complete
+        you_process.wait()
+        guest_process.wait()
+
+        if you_process.returncode != 0:
+            print("\n❌ Error: You track transcription failed")
+            sys.exit(1)
+        if guest_process.returncode != 0:
+            print("\n❌ Error: Guest track transcription failed")
+            sys.exit(1)
+
+        print("\n   ✅ Both transcriptions completed")
+
+        # Load both transcripts
+        you_json = find_first_json(you_dir)
+        guest_json = find_first_json(guest_dir)
+
+        if not you_json or not guest_json:
+            print("❌ Error: Could not find transcription JSON outputs")
+            sys.exit(1)
+
+        you_segments = load_segments(you_json)
+        guest_segments = load_segments(guest_json)
+
+        # Tag segments with speaker labels
+        for seg in you_segments:
+            seg["speaker"] = "You"
+        for seg in guest_segments:
+            seg["speaker"] = "Guest"
+
+        # Merge by timestamp
+        all_segments = sorted(you_segments + guest_segments, key=lambda s: s["start"])
+
+        # Write transcript
+        write_blocked_transcript(all_segments, out_dir, args.transcript_name, args.block_seconds)
+
     else:
-        mapping = interactive_map_speakers(segments, speakers, durations, args.sample_lines)
+        # Standard diarization mode
+        # Extract audio
+        wav_path = extract_mono_wav(input_path, out_dir)
 
-    # Apply mapping and write transcript
-    seg_mapped = apply_mapping(segments, mapping)
-    write_blocked_transcript(seg_mapped, out_dir, args.transcript_name, args.block_seconds)
+        # Transcribe with diarization
+        transcribe_with_diarization(
+            wav_path,
+            out_dir,
+            model=args.model,
+            language=args.language,
+            min_speakers=args.min_speakers,
+            max_speakers=args.max_speakers,
+            hf_token=hf_token,
+            batch_size=args.batch_size,
+        )
+
+        # Find WhisperX JSON output
+        json_path = find_first_json(out_dir)
+        if not json_path:
+            print("❌ Error: Could not find WhisperX JSON output")
+            sys.exit(1)
+
+        # Load and process segments
+        segments = load_segments(json_path)
+        speakers, durations = summarize_speakers(segments)
+
+        if not speakers:
+            print("❌ Error: No speakers detected")
+            print("   Check diarization settings and HF token permissions")
+            sys.exit(1)
+
+        # Map speakers (interactive or non-interactive)
+        if speaker_names:
+            mapping = non_interactive_map_speakers(speakers, speaker_names)
+        else:
+            mapping = interactive_map_speakers(segments, speakers, durations, args.sample_lines)
+
+        # Apply mapping and write transcript
+        seg_mapped = apply_mapping(segments, mapping)
+        write_blocked_transcript(seg_mapped, out_dir, args.transcript_name, args.block_seconds)
 
     print("\n🎉 All done!")
     print(f"📂 Output folder: {out_dir}")
